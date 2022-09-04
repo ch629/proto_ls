@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package foo.bar.v1;
+
+import "foo/bar/baz.proto";
+
+option go_package = "github.com/ch629/proto_ls/foo/bar/v1;bar";
+
+message TestMessage {
+    string name = 1;
+    foo.bar.baz.Amount amount = 2;
+}
+
