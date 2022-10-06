@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 type DocumentUri = String;
 
+#[derive(Debug)]
 pub struct LsMessage<T> {
     // Headers
     // TODO: We might not know the length until we've serialized it
@@ -12,6 +11,14 @@ pub struct LsMessage<T> {
     pub headers: Vec<String>,
 
     pub content: LsMessageContent<T>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LsBaseMessage {
+    pub json_rpc: String,
+    pub id: usize,
+    pub method: String,
+    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,4 +67,22 @@ pub struct DocumentFilter {
     pub language: Option<String>,
     pub scheme: Option<String>,
     pub pattern: Option<String>,
+}
+
+enum LsMethod {}
+
+#[derive(Debug, Serialize)]
+pub struct LsResponse {
+    pub id: String,
+    // TODO: result?: string | number | boolean | object | null;
+    pub result: Option<String>,
+    pub error: Option<LsResponseError>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LsResponseError {
+    pub code: isize,
+    pub message: String,
+    // TODO: data?: string | number | boolean | array | object | null;
+    pub data: Option<String>,
 }

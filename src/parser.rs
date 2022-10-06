@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     io::{self, BufReader, Read},
     vec,
 };
@@ -8,7 +9,7 @@ use anyhow::{bail, Context, Result};
 #[derive(Debug)]
 pub struct ProtoFile {
     syntax: ProtoSyntax,
-    package: Vec<String>,
+    package: Vec<Vec<u8>>,
     imports: Vec<ProtoImport>,
     options: Vec<ProtoOption>,
     messages: Vec<ProtoMessage>,
@@ -36,28 +37,28 @@ struct ProtoImport {
 
 #[derive(Debug)]
 struct ProtoOption {
-    name: String,
+    name: Vec<u8>,
     value: String,
 }
 
 // TODO: Embedding messages in messages
 #[derive(Debug)]
 struct ProtoMessage {
-    name: String,
+    name: Vec<u8>,
     fields: Vec<MessageField>,
 }
 
 #[derive(Debug)]
 struct ProtoService {
-    name: String,
+    name: Vec<u8>,
     rpcs: Vec<ProtoRpc>,
 }
 
 #[derive(Debug)]
 struct ProtoRpc {
-    name: String,
-    params: Vec<String>,
-    returns: String,
+    name: Vec<u8>,
+    params: Vec<Vec<u8>>,
+    returns: Vec<u8>,
 }
 
 // TODO: Adding options to a message field
@@ -65,15 +66,15 @@ struct ProtoRpc {
 // TODO: Handle a map type - map<string, string>
 #[derive(Debug)]
 struct MessageField {
-    r#type: Vec<String>,
-    name: String,
+    r#type: Vec<Vec<u8>>,
+    name: Vec<u8>,
     index: u16,
 }
 
 #[derive(Debug, strum::Display)]
 pub enum ProtoToken {
-    FullIdentifier(Vec<String>),
-    Identifier(String),
+    FullIdentifier(Vec<Vec<u8>>),
+    Identifier(Vec<u8>),
     StringLiteral(String),
     IntLiteral(isize),
     Colon,
@@ -217,7 +218,7 @@ fn scan_import<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoImport> {
     bail!("invalid import")
 }
 
-fn scan_package<T: Read>(scan: &mut Scanner<T>) -> Result<Vec<String>> {
+fn scan_package<T: Read>(scan: &mut Scanner<T>) -> Result<Vec<Vec<u8>>> {
     if let Some(ProtoToken::FullIdentifier(pkg)) = scan.next() {
         if let Some(ProtoToken::SemiColon) = scan.next() {
             return Ok(pkg);
@@ -242,78 +243,94 @@ fn scan_option<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoOption> {
     bail!("invalid option")
 }
 
-#[derive(Debug)]
 pub struct Scanner<T: Read> {
     reader: BufReader<T>,
     done: bool,
-    look_ahead: Option<char>,
+    buffer: RefCell<Vec<u8>>,
 }
 
-// TODO: We're using u8 from the reader which isn't necessarily a full char
-// -> could use utf8_char_width(c) - this should only be needed for string literals
 impl<'a, T: Read> Scanner<T> {
     pub fn new(reader: T) -> Self {
         Self {
             reader: BufReader::new(reader),
             done: false,
-            look_ahead: None,
+            buffer: RefCell::new(Vec::with_capacity(8)),
         }
     }
 
-    fn peek(&mut self) -> Option<char> {
-        match self.look_ahead {
-            Some(b) => Some(b as char),
-            None => {
-                let mut b: [u8; 1] = [0u8; 1];
-                match self.reader.read(&mut b) {
-                    Ok(i) => {
-                        // EOF
-                        if i == 0 {
-                            self.done = true;
-                            None
-                        } else {
-                            self.look_ahead = Some(b[0] as char);
-                            Some(b[0] as char)
-                        }
-                    }
-                    Err(_) => None,
-                }
+    fn peek(&mut self) -> Option<u8> {
+        if self.is_buffer_empty() {
+            let _ = self.load_buffer(1);
+        }
+
+        match self.buffer.borrow().first() {
+            Some(i) => Some(*i),
+            None => None,
+        }
+    }
+
+    // TODO: I only really need this for 2 bytes for comments
+    fn peek_string(&mut self, len: usize) -> Result<String> {
+        let b_len = self.buffer.borrow().len();
+        if b_len < len {
+            // TODO: Check we're long enough
+            self.append_buffer(len as u64 - b_len as u64)?;
+
+            if b_len < len {
+                bail!("not enough bytes left")
             }
         }
+        let chars = &self.buffer.borrow()[0..len];
+        Ok(String::from_utf8(chars.to_vec())?)
+    }
+
+    fn load_buffer(&mut self, len: u64) -> Result<usize> {
+        if !self.is_buffer_empty() {
+            bail!("buffer is not clear")
+        }
+
+        self.append_buffer(len)
+    }
+
+    fn is_buffer_empty(&self) -> bool {
+        self.buffer.borrow().is_empty()
+    }
+
+    fn append_buffer(&mut self, len: u64) -> Result<usize> {
+        // TODO: I wanted to do this with reader.take(len) but it ends up moving ownership
+        // -> Can we use a RefCell?
+        let mut count = 0;
+        let mut b = self.buffer.borrow_mut();
+        for _ in 0..len {
+            let mut byte: [u8; 1] = [0];
+            let len = self.reader.read(&mut byte)?;
+            if len == 1 {
+                b.push(byte[0]);
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     fn is_done(&self) -> bool {
         self.done
     }
 
-    fn pop(&mut self) -> Option<char> {
-        match self.look_ahead {
-            Some(b) => {
-                self.look_ahead = None;
-                Some(b)
-            }
-            None => {
-                let mut b: [u8; 1] = [0u8; 1];
-                match self.reader.read(&mut b) {
-                    Ok(i) => {
-                        if i == 0 {
-                            self.done = true;
-                            None
-                        } else {
-                            Some(b[0] as char)
-                        }
-                    }
-                    Err(_) => {
-                        self.done = true;
-                        None
-                    }
-                }
-            }
+    fn pop(&mut self) -> Option<()> {
+        if self.is_buffer_empty() {
+            // TODO: We can avoid the extra buffer logic without using peek
+            let b = self.peek();
+            self.buffer.borrow_mut().clear();
+            b.map(|_| ())
+        } else {
+            let mut buf = self.buffer.borrow_mut();
+            buf.drain(0..1);
+            Some(())
         }
     }
 
-    fn scan(&mut self, predicate: impl Fn(&char) -> bool) -> Option<String> {
-        let mut seq = String::new();
+    fn scan(&mut self, predicate: impl Fn(&u8) -> bool) -> Option<Vec<u8>> {
+        let mut seq = vec![];
         loop {
             match self.peek() {
                 Some(c) => {
@@ -335,19 +352,19 @@ impl<'a, T: Read> Scanner<T> {
         }
     }
 
-    fn ident(&mut self) -> Option<String> {
+    fn ident(&mut self) -> Option<Vec<u8>> {
         if let Some(c) = self.peek() {
             match c {
-                'a'..='z' => {}
-                'A'..='Z' => {}
+                b'a'..=b'z' => {}
+                b'A'..=b'Z' => {}
                 _ => return None,
             }
         }
         self.scan(|c| match c {
-            'a'..='z' => true,
-            'A'..='Z' => true,
-            '0'..='9' => true,
-            '_' => true,
+            b'a'..=b'z' => true,
+            b'A'..=b'Z' => true,
+            b'0'..=b'9' => true,
+            b'_' => true,
             _ => false,
         })
     }
@@ -355,7 +372,7 @@ impl<'a, T: Read> Scanner<T> {
     fn dot(&mut self) -> Option<()> {
         match self.peek() {
             Some(c) => {
-                if c == '.' {
+                if c == b'.' {
                     Some(())
                 } else {
                     None
@@ -365,7 +382,7 @@ impl<'a, T: Read> Scanner<T> {
         }
     }
 
-    fn full_ident(&mut self) -> Result<Option<Vec<String>>> {
+    fn full_ident(&mut self) -> Result<Option<Vec<Vec<u8>>>> {
         let mut seq = vec![];
         let mut required = false;
         loop {
@@ -394,80 +411,136 @@ impl<'a, T: Read> Scanner<T> {
         }
     }
 
-    fn int_literal(&mut self) -> Option<String> {
+    fn int_literal(&mut self) -> Option<Vec<u8>> {
         if let Some(c) = self.peek() {
             match c {
-                '1'..='9' => {}
+                b'1'..=b'9' => {}
                 _ => return None,
             }
         }
         self.scan(|c| match c {
-            '0'..='9' => true,
+            b'0'..=b'9' => true,
             _ => false,
         })
     }
 
-    fn string_literal(&mut self) -> Result<Option<String>> {
-        let open_char: char;
+    fn string(&mut self) -> Option<Result<Vec<u8>>> {
+        let open_char;
         match self.peek() {
-            Some('"') => {
-                open_char = '"';
-            }
-            Some('\'') => open_char = '\'',
-            _ => return Ok(None),
+            Some(b'"') => open_char = b'"',
+            Some(b'\'') => open_char = b'\'',
+            _ => return None,
         }
         self.pop();
-        let res = self.scan(|c| c != &open_char);
-        // Consume end quote
-        self.pop();
 
-        Ok(res)
+        Some(self.string_literal(&open_char))
     }
 
-    // whitespace consumes all of the whitespace characters and returns Some if any were consumed
-    // or None if no whitespace chars were consumed
-    fn whitespace(&mut self) -> Option<()> {
-        let mut found_any = false;
-        while let Some(c) = self.peek() {
-            match c {
-                ' ' | '\r' | '\n' | '\t' => {
-                    self.pop();
-                    found_any = true;
-                }
-                _ => break,
-            }
-        }
+    fn string_literal(&mut self, open_char: &u8) -> Result<Vec<u8>> {
+        Ok(self.take_until_consume_including(|c| c != open_char)?)
+    }
 
-        if found_any {
-            Some(())
-        } else {
-            None
+    // whitespace consumes all of the whitespace characters
+    fn whitespace(&mut self) {
+        let _ = self.take_until(
+            |c| match c {
+                b' ' | b'\r' | b'\n' | b'\t' => true,
+                _ => false,
+            },
+            true,
+        );
+    }
+
+    fn comment(&mut self) -> Option<Result<()>> {
+        if let Ok(s) = self.peek_string(2) {
+            // TODO: Need to pop 2 -> Or can we rely on take_until to do this?
+            return match s.as_str() {
+                "//" => Some(self.line_comment()),
+                "/*" => Some(self.block_comment()),
+                _ => None,
+            };
         }
+        None
+    }
+
+    fn line_comment(&mut self) -> Result<()> {
+        self.take_until(|c| c != &b'\n' && c != &b'\x00', true)
+    }
+
+    fn block_comment(&mut self) -> Result<()> {
+        self.take_until_str(2, |s| s == "*/")
     }
 
     fn consume_comments(&mut self) -> Result<()> {
-        loop {
-            if let Some(c) = self.peek() {
-                if c == '/' {
-                    self.pop();
-                    if let Some(c) = self.peek() {
-                        if c == '/' {
-                            // Consume everything until a newline
-                            self.scan(|c| c != &'\n');
-                            self.whitespace();
-                        } else {
-                            bail!("expected '//'")
-                        }
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
+        while let Some(r) = self.comment() {
+            r?
         }
 
         Ok(())
+    }
+
+    // take_until_consume takes each character until a predicate no longer matches & consumes them,
+    // including the character which fails the predicate
+    fn take_until_consume_including(&mut self, predicate: impl Fn(&u8) -> bool) -> Result<Vec<u8>> {
+        match self.take_until_consume(predicate) {
+            Ok(s) => {
+                self.pop();
+                Ok(s)
+            }
+            err => err,
+        }
+    }
+
+    // take_until_consume takes each character until a predicate no longer matches & consumes them
+    fn take_until_consume(&mut self, predicate: impl Fn(&u8) -> bool) -> Result<Vec<u8>> {
+        let mut buf = vec![];
+        while let Some(c) = self.peek() {
+            if predicate(&c) {
+                self.pop();
+                buf.push(c);
+            } else {
+                return Ok(buf);
+            }
+        }
+        bail!("didn't match predicate")
+    }
+
+    fn take_until_str(&mut self, str_len: usize, predicate: impl Fn(&str) -> bool) -> Result<()> {
+        while let Ok(s) = self.peek_string(str_len) {
+            if predicate(&s) {
+                for _ in 0..str_len {
+                    self.pop();
+                }
+            } else {
+                return Ok(());
+            }
+        }
+
+        bail!("didn't match predicate")
+    }
+
+    // take_until consumes all characters while the predicate is passes but throws away the result
+    // returns an Ok if include_eof is true & it hits the EOF
+    fn take_until(&mut self, predicate: impl Fn(&u8) -> bool, include_eof: bool) -> Result<()> {
+        while let Some(c) = self.peek() {
+            if predicate(&c) {
+                self.pop();
+            } else {
+                return Ok(());
+            }
+        }
+
+        if include_eof && self.peek() == None {
+            return Ok(());
+        }
+        bail!("didn't match predicate")
+    }
+
+    fn pop_buffer(&mut self) -> Result<String> {
+        let mut buf = self.buffer.borrow_mut();
+        let str = String::from_utf8(buf.to_vec())?;
+        buf.clear();
+        Ok(str)
     }
 }
 
@@ -475,6 +548,7 @@ impl<T: io::Read> Iterator for Scanner<T> {
     type Item = ProtoToken;
 
     // TODO: Comments
+    // TODO: Multiline comments /* * * * */
     // TODO: How do we handle errors? -> Use a Result<ProtoToken> as Item?
     fn next(&mut self) -> Option<Self::Item> {
         self.whitespace();
@@ -485,8 +559,11 @@ impl<T: io::Read> Iterator for Scanner<T> {
         if let Ok(Some(name)) = self.full_ident() {
             if name.len() == 1 {
                 let name = &name[0];
+                let name_vec = name.to_vec();
+                let name_string = String::from_utf8(name_vec.clone()).unwrap();
+                println!("name: {name_string}");
                 // Keywords or identifier
-                return Some(match name.as_str() {
+                return Some(match name_string.as_str() {
                     "syntax" => ProtoToken::Syntax,
                     "package" => ProtoToken::Package,
                     "option" => ProtoToken::Option,
@@ -498,42 +575,48 @@ impl<T: io::Read> Iterator for Scanner<T> {
                     "repeated" => ProtoToken::Repeated,
                     "weak" => ProtoToken::Weak,
                     "public" => ProtoToken::Public,
-                    _ => ProtoToken::Identifier(name.to_string()),
+                    _ => ProtoToken::Identifier(name_vec),
                 });
             }
 
             return Some(ProtoToken::FullIdentifier(name));
         }
 
-        match self.string_literal() {
-            Ok(opt) => {
-                if let Some(literal) = opt {
-                    return Some(ProtoToken::StringLiteral(literal));
-                }
+        match self.string() {
+            Some(opt) => {
+                return match opt {
+                    Ok(s) => Some(ProtoToken::StringLiteral(String::from_utf8(s).unwrap())),
+                    Err(_) => None,
+                };
             }
-            Err(_) => return None,
+            None => {}
         }
 
         if let Some(i) = self.int_literal() {
             // TODO: Remove unwrap
-            return Some(ProtoToken::IntLiteral(i.parse().unwrap()));
+            return Some(ProtoToken::IntLiteral(
+                String::from_utf8(i).unwrap().parse().unwrap(),
+            ));
         }
 
         if let Some(c) = self.peek() {
-            // TODO: Only pop if its expected
-            self.pop();
-            return match c {
-                ';' => Some(ProtoToken::SemiColon),
-                '=' => Some(ProtoToken::Equals),
-                '{' => Some(ProtoToken::OpenBracket),
-                '}' => Some(ProtoToken::CloseBracket),
-                '(' => Some(ProtoToken::OpenParen),
-                ')' => Some(ProtoToken::CloseParen),
-                '[' => Some(ProtoToken::OpenBrace),
-                ']' => Some(ProtoToken::CloseBrace),
-                ':' => Some(ProtoToken::Colon),
+            let token = match c {
+                b';' => Some(ProtoToken::SemiColon),
+                b'=' => Some(ProtoToken::Equals),
+                b'{' => Some(ProtoToken::OpenBracket),
+                b'}' => Some(ProtoToken::CloseBracket),
+                b'(' => Some(ProtoToken::OpenParen),
+                b')' => Some(ProtoToken::CloseParen),
+                b'[' => Some(ProtoToken::OpenBrace),
+                b']' => Some(ProtoToken::CloseBrace),
+                b':' => Some(ProtoToken::Colon),
                 _ => None,
             };
+
+            if token.is_some() {
+                self.pop();
+            }
+            return token;
         }
         None
     }

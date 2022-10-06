@@ -1,60 +1,91 @@
 mod ls;
 mod parser;
 
-use std::{collections::HashMap, fs::File};
-
-use anyhow::{bail, Ok, Result};
-use tokio::{
-    io::{AsyncBufReadExt, BufStream},
-    net::{TcpListener, TcpStream},
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs::File,
+    io::{stdin, BufRead, BufReader, Read},
 };
 
-// #[tokio::main]
-fn main() {
-    // let listener = TcpListener::bind("127.0.0.1:8080").await?;
+use anyhow::{bail, Result};
 
-    // loop {
-    //     let (stream, _) = listener.accept().await?;
-    //     // TODO: Spawn thread
-    //     let mut stream = BufStream::new(stream);
-    //     // header: value\r\n
-    //     // header: value\r\n
-    //     // \r\n
-    //     // {content}\r\n
-    //     // TODO: This should only exit out the current connection
-    //     process_headers(&mut stream).await?;
-    //     break;
-    // }
+#[tokio::main]
+async fn main() -> Result<()> {
+    handle_io().await?;
+    Ok(())
+}
 
+fn parse_and_log_file() {
     let f = File::open("/Users/charliehowe/Projects/rust/proto_ls/test.proto").unwrap();
     let mut sc = parser::Scanner::new(f);
-    let file = parser::scan_file(&mut sc).unwrap();
-
-    println!("{:#?}", file);
-    // Ok(())
+    let f = parser::scan_file(&mut sc).unwrap();
+    println!("{:#?}", f);
 }
 
-async fn process_headers(stream: &mut BufStream<TcpStream>) -> Result<HashMap<String, String>> {
-    let mut m = HashMap::new();
-    // TODO: Make sure we consume both \r\n and trim them
+async fn handle_io() -> Result<()> {
+    let rd = RefCell::new(BufReader::new(stdin()));
+    let mut parsing_headers = true;
+    let mut headers: HashMap<String, String> = HashMap::new();
     loop {
         let mut buf = String::new();
-        stream.read_line(&mut buf).await?;
+        let mut temp_rd = rd.borrow_mut();
+        temp_rd.read_line(&mut buf)?;
+        // TODO: Trim is needed to remove the \n\r, can we just remove the end?
+        let buf = buf.trim();
+        println!("buf: {:?}", buf.as_bytes());
+
         if buf.is_empty() {
+            parsing_headers = !parsing_headers;
+
+            // Clear headers from the previous message
+            if parsing_headers {
+                headers.clear();
+            } else {
+                let content_length = &headers["Content-Length"];
+                println!("length: {:?}", content_length.as_bytes());
+                let content_length: usize = content_length.parse()?;
+                let content = read_n(temp_rd.get_mut(), content_length)?;
+                println!("content: {:#?}", content);
+                parse_content(content)?;
+            }
+            continue;
+        }
+
+        if parsing_headers {
+            let (key, value) = parse_header(buf.to_string())?;
+            headers.insert(key.clone(), value.clone());
+            println!("header: {} - {}", key.clone(), value.clone());
+            continue;
+        }
+
+        // TODO: Ctrl+C
+        if buf == "quit" {
             break;
         }
-        let split: Vec<&str> = buf.split(": ").collect();
-
-        if split.len() != 2 {
-            bail!("invalid header format received: '{buf}'")
-        }
-        m.insert(split[0].to_string(), split[1].to_string());
     }
-    Ok(m)
+    Ok(())
 }
 
-async fn process_content(stream: &mut BufStream<TcpStream>) -> Result<()> {
-    let mut buf = String::new();
-    stream.read_line(&mut buf).await?;
-    todo!()
+fn read_n<R: Read>(rd: &mut R, n: usize) -> Result<Vec<u8>> {
+    let mut buf = vec![0u8; n];
+    let mut t = rd.take(n as u64);
+    t.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+fn parse_header(s: String) -> Result<(String, String)> {
+    let spl: Vec<&str> = s.split(": ").collect();
+
+    if spl.len() != 2 {
+        bail!("expected header in format {{Name}}: {{Value}}")
+    }
+    Ok((spl[0].to_string(), spl[1].to_string()))
+}
+
+fn parse_content(s: Vec<u8>) -> Result<()> {
+    let msg: ls::LsBaseMessage = serde_json::from_str(String::from_utf8(s)?.as_str())?;
+    // TODO: Map from message type to params
+    println!("m: {:#?}", msg);
+    Ok(())
 }
