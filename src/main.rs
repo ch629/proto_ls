@@ -87,5 +87,5 @@ fn parse_content(s: Vec<u8>) -> Result<()> {
     let msg: ls::LsBaseMessage = serde_json::from_str(String::from_utf8(s)?.as_str())?;
     // TODO: Map from message type to params
     println!("m: {:#?}", msg);
-    Ok(())
+    ls::on_message(msg)
 }

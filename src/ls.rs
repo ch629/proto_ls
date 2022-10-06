@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 type DocumentUri = String;
@@ -69,7 +70,10 @@ pub struct DocumentFilter {
     pub pattern: Option<String>,
 }
 
-enum LsMethod {}
+enum LsMethod {
+    // method: initialize
+    Initialize(InitializeRequest),
+}
 
 #[derive(Debug, Serialize)]
 pub struct LsResponse {
@@ -85,4 +89,81 @@ pub struct LsResponseError {
     pub message: String,
     // TODO: data?: string | number | boolean | array | object | null;
     pub data: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InitializeRequest {
+    pub process_id: usize,
+    pub client_info: Option<ClientInfo>,
+    pub locale: Option<String>,
+    pub root_path: Option<String>,
+    pub root_uri: Option<DocumentUri>,
+    pub initialization_options: Option<LspAny>,
+    pub capabilities: Option<ClientCapabilities>,
+    pub trace: Option<TraceValue>,
+    pub workspace_folders: Option<Vec<WorkspaceFolder>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InitializeResult {
+    pub capabilities: ServerCapabilities,
+    pub server_info: Option<ServerInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerCapabilities {}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: Option<String>,
+}
+
+// TODO: Enum?
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LspAny {}
+
+// TODO
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClientCapabilities {}
+
+// TODO: This is by string
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TraceValue {
+    Off,
+    Messages,
+    Verbose,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClientInfo {
+    pub name: String,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceFolder {
+    uri: DocumentUri,
+    name: String,
+}
+
+// TODO: Generate all of this with a proc macro DSL?
+fn get_method(msg: LsBaseMessage) -> Result<LsMethod> {
+    match msg.method.as_str() {
+        "initialize" => Ok(LsMethod::Initialize(serde_json::from_value(msg.params)?)),
+        unknown => bail!("unknown method type: {unknown}"),
+    }
+}
+
+fn handle_call(msg: LsMethod) -> Result<()> {
+    match msg {
+        LsMethod::Initialize(req) => {
+            println!("received initialize: {:#?}", req);
+            Ok(())
+        }
+    }
+}
+
+pub fn on_message(msg: LsBaseMessage) -> Result<()> {
+    get_method(msg).map(|m| handle_call(m))?
 }
