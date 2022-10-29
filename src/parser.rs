@@ -41,11 +41,11 @@ struct ProtoOption {
     value: String,
 }
 
-// TODO: Embedding messages in messages
 #[derive(Debug)]
 struct ProtoMessage {
     name: Vec<u8>,
     fields: Vec<MessageField>,
+    messages: Vec<ProtoMessage>,
 }
 
 #[derive(Debug)]
@@ -97,6 +97,20 @@ pub enum ProtoToken {
     Equals,
     Weak,
     Public,
+    Reserved,
+    Extend,
+    Extensions,
+    /// To is used for ranges `reserved 10 to max;`
+    To,
+    /// Max is interpreted as 2,147,483,647
+    Max,
+}
+
+#[derive(Debug)]
+pub struct PositionedProtoToken {
+    token: ProtoToken,
+    character: usize,
+    line: usize,
 }
 
 // proto = syntax { import | package | option | topLevelDef | emptyStatement }
@@ -138,6 +152,7 @@ pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
 
 // TODO: Write some helper funcs to make this all cleaner, better errors, store line num + char num
 fn scan_message<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoMessage> {
+    let mut messages = vec![];
     if let ProtoToken::Identifier(name) = scan.next().context("expected message name")? {
         if let ProtoToken::OpenBracket = scan.next().context("expected open bracket")? {
             let mut fields = vec![];
@@ -146,11 +161,15 @@ fn scan_message<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoMessage> {
                     ProtoToken::CloseBracket => {
                         break;
                     }
-                    ProtoToken::Message => todo!(),
+                    ProtoToken::Message => messages.push(scan_message(scan)?),
                     token => fields.push(scan_message_field(scan, token)?),
                 };
             }
-            return Ok(ProtoMessage { name, fields });
+            return Ok(ProtoMessage {
+                name,
+                fields,
+                messages,
+            });
         }
     }
     bail!("invalid message");
@@ -243,6 +262,14 @@ fn scan_option<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoOption> {
     bail!("invalid option")
 }
 
+fn read_n<R: Read>(reader: &mut R, bytes_to_read: u64) -> Result<Vec<u8>> {
+    let mut buf = vec![];
+    let mut chunk = reader.take(bytes_to_read);
+    // TODO: Return error if n != bytes_to_read?
+    let _ = chunk.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
 pub struct Scanner<T: Read> {
     reader: BufReader<T>,
     done: bool,
@@ -297,19 +324,9 @@ impl<'a, T: Read> Scanner<T> {
     }
 
     fn append_buffer(&mut self, len: u64) -> Result<usize> {
-        // TODO: I wanted to do this with reader.take(len) but it ends up moving ownership
-        // -> Can we use a RefCell?
-        let mut count = 0;
-        let mut b = self.buffer.borrow_mut();
-        for _ in 0..len {
-            let mut byte: [u8; 1] = [0];
-            let len = self.reader.read(&mut byte)?;
-            if len == 1 {
-                b.push(byte[0]);
-                count += 1;
-            }
-        }
-        Ok(count)
+        let mut bytes = read_n(&mut self.reader, len)?;
+        self.buffer.borrow_mut().append(&mut bytes);
+        Ok(bytes.len())
     }
 
     fn is_done(&self) -> bool {
@@ -561,7 +578,6 @@ impl<T: io::Read> Iterator for Scanner<T> {
                 let name = &name[0];
                 let name_vec = name.to_vec();
                 let name_string = String::from_utf8(name_vec.clone()).unwrap();
-                println!("name: {name_string}");
                 // Keywords or identifier
                 return Some(match name_string.as_str() {
                     "syntax" => ProtoToken::Syntax,
@@ -575,6 +591,11 @@ impl<T: io::Read> Iterator for Scanner<T> {
                     "repeated" => ProtoToken::Repeated,
                     "weak" => ProtoToken::Weak,
                     "public" => ProtoToken::Public,
+                    "reserved" => ProtoToken::Reserved,
+                    "extend" => ProtoToken::Extend,
+                    "extensions" => ProtoToken::Extensions,
+                    "to" => ProtoToken::To,
+                    "max" => ProtoToken::Max,
                     _ => ProtoToken::Identifier(name_vec),
                 });
             }
