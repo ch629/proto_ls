@@ -3,14 +3,12 @@ mod language_server;
 mod parser;
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs::File,
-    io::{stdin, stdout, BufRead, BufReader, BufWriter, Read, Write},
+    io::{stdin, BufRead, BufReader, Read},
 };
 
 use anyhow::{bail, Result};
-use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +19,7 @@ async fn main() -> Result<()> {
 
 fn parse_and_log_file() {
     let f = File::open("/Users/charliehowe/Projects/rust/proto_ls/test.proto").unwrap();
-    let mut sc = parser::Scanner::new(f);
+    let mut sc = parser::scanner::Scanner::new(f);
     let f = parser::scan_file(&mut sc).unwrap();
     println!("{f:#?}");
 }
