@@ -4,7 +4,7 @@ use std::{
     vec,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 #[derive(Debug)]
 pub struct ProtoFile {
@@ -71,7 +71,7 @@ struct MessageField {
     index: u16,
 }
 
-#[derive(Debug, strum::Display)]
+#[derive(Debug, strum::Display, PartialEq)]
 pub enum ProtoToken {
     FullIdentifier(Vec<Vec<u8>>),
     Identifier(Vec<u8>),
@@ -104,6 +104,10 @@ pub enum ProtoToken {
     To,
     /// Max is interpreted as 2,147,483,647
     Max,
+    Map,
+    LessThan,
+    GreaterThan,
+    Comma,
 }
 
 #[derive(Debug)]
@@ -153,26 +157,26 @@ pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
 // TODO: Write some helper funcs to make this all cleaner, better errors, store line num + char num
 fn scan_message<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoMessage> {
     let mut messages = vec![];
-    if let ProtoToken::Identifier(name) = scan.next().context("expected message name")? {
-        if let ProtoToken::OpenBracket = scan.next().context("expected open bracket")? {
-            let mut fields = vec![];
-            while let Some(token) = scan.next() {
-                match token {
-                    ProtoToken::CloseBracket => {
-                        break;
-                    }
-                    ProtoToken::Message => messages.push(scan_message(scan)?),
-                    token => fields.push(scan_message_field(scan, token)?),
-                };
+    let Some(ProtoToken::Identifier(name)) = scan.next() else {
+        bail!("expected identifier")
+    };
+    scan.expect(ProtoToken::OpenBracket)?;
+    let mut fields = vec![];
+    while let Some(token) = scan.next() {
+        match token {
+            ProtoToken::CloseBracket => {
+                break;
             }
-            return Ok(ProtoMessage {
-                name,
-                fields,
-                messages,
-            });
-        }
+            ProtoToken::Message => messages.push(scan_message(scan)?),
+            token => fields.push(scan_message_field(scan, token)?),
+        };
     }
-    bail!("invalid message");
+
+    Ok(ProtoMessage {
+        name,
+        fields,
+        messages,
+    })
 }
 
 fn scan_message_field<T: Read>(
@@ -185,20 +189,20 @@ fn scan_message_field<T: Read>(
         _ => bail!("expected identifier type"),
     };
 
-    if let Some(ProtoToken::Identifier(name)) = scan.next() {
-        if let Some(ProtoToken::Equals) = scan.next() {
-            if let Some(ProtoToken::IntLiteral(index)) = scan.next() {
-                if let Some(ProtoToken::SemiColon) = scan.next() {
-                    return Ok(MessageField {
-                        r#type,
-                        name,
-                        index: index.try_into()?,
-                    });
-                }
-            }
-        }
-    }
-    bail!("invalid message field")
+    let Some(ProtoToken::Identifier(name)) = scan.next() else {
+        bail!("expected identifier")
+    };
+    scan.expect(ProtoToken::Equals)?;
+    let Some(ProtoToken::IntLiteral(index)) = scan.next() else {
+        bail!("expected int literal")
+    };
+    scan.expect(ProtoToken::SemiColon)?;
+
+    Ok(MessageField {
+        r#type,
+        name,
+        index: index.try_into()?,
+    })
 }
 
 fn scan_service<T: Read>(_scan: &mut Scanner<T>) -> Result<ProtoService> {
@@ -206,60 +210,56 @@ fn scan_service<T: Read>(_scan: &mut Scanner<T>) -> Result<ProtoService> {
 }
 
 fn scan_syntax<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoSyntax> {
-    if let Some(ProtoToken::Syntax) = scan.next() {
-        if let Some(ProtoToken::Equals) = scan.next() {
-            if let Some(ProtoToken::StringLiteral(syntax)) = scan.next() {
-                let s = match syntax.as_str() {
-                    "proto3" => ProtoSyntax::PROTO3,
-                    "proto2" => ProtoSyntax::PROTO2,
-                    _ => bail!("expected a syntax of either 'proto3' or 'proto2'"),
-                };
+    scan.expect(ProtoToken::Syntax)?;
+    scan.expect(ProtoToken::Equals)?;
+    let Some(ProtoToken::StringLiteral(syntax)) = scan.next() else {
+        bail!("expected string literal")
+    };
+    let s = match syntax.as_str() {
+        "proto3" => ProtoSyntax::PROTO3,
+        "proto2" => ProtoSyntax::PROTO2,
+        _ => bail!("expected a syntax of either 'proto3' or 'proto2'"),
+    };
+    scan.expect(ProtoToken::SemiColon)?;
 
-                if let Some(ProtoToken::SemiColon) = scan.next() {
-                    return Ok(s);
-                }
-            }
-        }
-    }
-    bail!("invalid syntax");
+    Ok(s)
 }
 
 fn scan_import<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoImport> {
     // TODO: Optional public or weak
-    if let Some(ProtoToken::StringLiteral(import)) = scan.next() {
-        if let Some(ProtoToken::SemiColon) = scan.next() {
-            return Ok(ProtoImport {
-                r#type: ProtoImportType::DEFAULT,
-                path: import,
-            });
-        }
-    }
-    bail!("invalid import")
+    let Some(ProtoToken::StringLiteral(import)) = scan.next() else{
+        bail!("expected string literal")
+    };
+    scan.expect(ProtoToken::SemiColon)?;
+    Ok(ProtoImport {
+        r#type: ProtoImportType::DEFAULT,
+        path: import,
+    })
 }
 
 fn scan_package<T: Read>(scan: &mut Scanner<T>) -> Result<Vec<Vec<u8>>> {
-    if let Some(ProtoToken::FullIdentifier(pkg)) = scan.next() {
-        if let Some(ProtoToken::SemiColon) = scan.next() {
-            return Ok(pkg);
-        }
-    }
-    bail!("invalid package")
+    let Some(ProtoToken::FullIdentifier(pkg)) = scan.next() else {
+        bail!("expected identifier")
+    };
+    scan.expect(ProtoToken::SemiColon)?;
+
+    Ok(pkg)
 }
 
 fn scan_option<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoOption> {
-    if let Some(ProtoToken::Identifier(id)) = scan.next() {
-        if let Some(ProtoToken::Equals) = scan.next() {
-            if let Some(ProtoToken::StringLiteral(opt)) = scan.next() {
-                if let Some(ProtoToken::SemiColon) = scan.next() {
-                    return Ok(ProtoOption {
-                        name: id,
-                        value: opt,
-                    });
-                }
-            }
-        }
-    }
-    bail!("invalid option")
+    let Some(ProtoToken::Identifier(id)) = scan.next() else {
+        bail!("expected identifier")
+    };
+    scan.expect(ProtoToken::Equals)?;
+    let Some(ProtoToken::StringLiteral(opt)) = scan.next() else {
+        bail!("expected string literal")
+    };
+    scan.expect(ProtoToken::SemiColon)?;
+
+    Ok(ProtoOption {
+        name: id,
+        value: opt,
+    })
 }
 
 fn read_n<R: Read>(reader: &mut R, bytes_to_read: u64) -> Result<Vec<u8>> {
@@ -296,6 +296,7 @@ impl<'a, T: Read> Scanner<T> {
         }
     }
 
+    // TODO: Could we use iter.peekable() instead & avoid the LR(2) requirement?
     // TODO: I only really need this for 2 bytes for comments
     fn peek_string(&mut self, len: usize) -> Result<String> {
         let b_len = self.buffer.borrow().len();
@@ -559,12 +560,22 @@ impl<'a, T: Read> Scanner<T> {
         buf.clear();
         Ok(str)
     }
+
+    fn expect(&mut self, tkn: ProtoToken) -> Result<ProtoToken> {
+        let Some(got_token) = self.next() else {
+            bail!("wanted {tkn} but received EOF")
+        };
+        if tkn != got_token {
+            bail!("wanted {tkn} but got {got_token}")
+        }
+        Ok(tkn)
+    }
 }
 
 impl<T: io::Read> Iterator for Scanner<T> {
     type Item = ProtoToken;
 
-    // TODO: Comments
+    // TODO: Comments -> We could treat these as a token of their own?
     // TODO: Multiline comments /* * * * */
     // TODO: How do we handle errors? -> Use a Result<ProtoToken> as Item?
     fn next(&mut self) -> Option<Self::Item> {
@@ -596,6 +607,7 @@ impl<T: io::Read> Iterator for Scanner<T> {
                     "extensions" => ProtoToken::Extensions,
                     "to" => ProtoToken::To,
                     "max" => ProtoToken::Max,
+                    "map" => ProtoToken::Map,
                     _ => ProtoToken::Identifier(name_vec),
                 });
             }
@@ -631,6 +643,9 @@ impl<T: io::Read> Iterator for Scanner<T> {
                 b'[' => Some(ProtoToken::OpenBrace),
                 b']' => Some(ProtoToken::CloseBrace),
                 b':' => Some(ProtoToken::Colon),
+                b'<' => Some(ProtoToken::LessThan),
+                b'>' => Some(ProtoToken::GreaterThan),
+                b',' => Some(ProtoToken::Comma),
                 _ => None,
             };
 

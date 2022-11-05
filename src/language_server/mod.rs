@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+mod types;
+
 type DocumentUri = String;
 
 #[derive(Debug)]
@@ -72,7 +74,7 @@ pub struct DocumentFilter {
 
 enum LsMethod {
     // method: initialize
-    Initialize(InitializeRequest),
+    Initialize(types::InitializeParams),
 }
 
 #[derive(Debug, Serialize)]
@@ -89,62 +91,6 @@ pub struct LsResponseError {
     pub message: String,
     // TODO: data?: string | number | boolean | array | object | null;
     pub data: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InitializeRequest {
-    pub process_id: usize,
-    pub client_info: Option<ClientInfo>,
-    pub locale: Option<String>,
-    pub root_path: Option<String>,
-    pub root_uri: Option<DocumentUri>,
-    pub initialization_options: Option<LspAny>,
-    pub capabilities: Option<ClientCapabilities>,
-    pub trace: Option<TraceValue>,
-    pub workspace_folders: Option<Vec<WorkspaceFolder>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InitializeResult {
-    pub capabilities: ServerCapabilities,
-    pub server_info: Option<ServerInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerCapabilities {}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerInfo {
-    pub name: String,
-    pub version: Option<String>,
-}
-
-// TODO: Enum?
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LspAny {}
-
-// TODO
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClientCapabilities {}
-
-// TODO: This is by string
-#[derive(Debug, Serialize, Deserialize)]
-pub enum TraceValue {
-    Off,
-    Messages,
-    Verbose,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClientInfo {
-    pub name: String,
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WorkspaceFolder {
-    uri: DocumentUri,
-    name: String,
 }
 
 // TODO: Generate all of this with a proc macro DSL?

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-mod ls;
+mod language_server;
 mod parser;
 
 use std::{
@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{bail, Result};
+use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,19 +26,16 @@ fn parse_and_log_file() {
     println!("{f:#?}");
 }
 
+// signal::ctrl_c().await?;
 async fn handle_io() -> Result<()> {
     // TODO: Organizing writes back for outputs
-    let mut writer = BufWriter::new(stdout());
-    let _ = writer.write("testing".as_bytes());
-    let reader = RefCell::new(BufReader::new(stdin()));
+    let mut reader = BufReader::new(stdin());
     let mut parsing_headers = true;
     let mut headers: HashMap<String, String> = HashMap::new();
     loop {
         let mut buf = String::new();
-        let mut temp_rd = reader.borrow_mut();
-        temp_rd.read_line(&mut buf)?;
-        // TODO: Trim is needed to remove the \n\r, can we just remove the end?
-        let buf = buf.trim();
+        reader.read_line(&mut buf)?;
+        let buf = buf.trim_end();
         println!("buf: {:?}", buf.as_bytes());
 
         if buf.is_empty() {
@@ -50,7 +48,7 @@ async fn handle_io() -> Result<()> {
                 let content_length = &headers["Content-Length"];
                 println!("length: {:?}", content_length.as_bytes());
                 let content_length: usize = content_length.parse()?;
-                let content = read_n(temp_rd.get_mut(), content_length)?;
+                let content = read_n(&mut reader, content_length)?;
                 println!("content: {content:#?}");
                 // TODO: can we pass this into a channel for processing?
                 parse_content(content)?;
@@ -90,8 +88,8 @@ fn parse_header(s: String) -> Result<(String, String)> {
 }
 
 fn parse_content(s: Vec<u8>) -> Result<()> {
-    let msg: ls::LsBaseMessage = serde_json::from_str(String::from_utf8(s)?.as_str())?;
+    let msg: language_server::LsBaseMessage = serde_json::from_str(String::from_utf8(s)?.as_str())?;
     // TODO: Map from message type to params
     println!("m: {msg:#?}");
-    ls::on_message(msg)
+    language_server::on_message(msg)
 }
