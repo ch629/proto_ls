@@ -341,31 +341,37 @@ impl<T: io::Read> Iterator for Scanner<T> {
                     self.pop();
                     if let Some(c) = self.peek() {
                         let token = match c {
-                            b'/' => Some(ProtoToken::Comment(
-                                self.take_until_consume_including(
-                                    |c| c != &b'\n' && c != &b'\x00',
-                                    true,
-                                )
-                                .unwrap(),
-                            )),
+                            b'/' => {
+                                self.pop();
+                                Some(ProtoToken::Comment(
+                                    self.take_until_consume_including(
+                                        |c| c != &b'\n' && c != &b'\x00',
+                                        true,
+                                    )
+                                    .unwrap(),
+                                ))
+                            }
                             b'*' => {
+                                self.pop();
                                 let mut buf = vec![];
                                 loop {
                                     buf.append(
                                         &mut self
-                                            .take_until_consume_including(|c| c == &b'*', false)
+                                            .take_until_consume(|c| c != &b'*', false)
                                             .unwrap(),
                                     );
+                                    // pop '*'
+                                    self.pop();
 
-                                    let Some(c) = self.peek() else {
+                                    let Some(ch) = self.peek() else {
                                         panic!("EOF before end of multiline comment")
                                     };
 
-                                    if c == b'/' {
+                                    if ch == b'/' {
                                         self.pop();
-                                        buf.push(b'/');
                                         break;
                                     }
+                                    buf.push(b'*');
                                 }
 
                                 Some(ProtoToken::Comment(buf))
@@ -387,4 +393,34 @@ impl<T: io::Read> Iterator for Scanner<T> {
         }
         None
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! scan_tests {
+        ($($name:ident: $value:expr,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (input, expected) = $value;
+                let mut scan: Scanner<&[u8]> = Scanner::new(input.as_bytes().into());
+                assert_eq!(Some(expected), scan.next());
+            }
+        )*
+        }
+    }
+
+    scan_tests!(
+        syntax: ("syntax", ProtoToken::Syntax),
+        full_ident: ("foo.bar.baz", ProtoToken::FullIdentifier(vec!["foo".into(), "bar".into(), "baz".into()])),
+        int_literal: ("42", ProtoToken::IntLiteral(42)),
+        string_literal: ("\"string\"", ProtoToken::StringLiteral("string".to_owned())),
+        single_line_comment: ("//comment\n", ProtoToken::Comment("comment".into())),
+        single_line_comment_eof: ("//comment", ProtoToken::Comment("comment".into())),
+        multi_line_comment: ("/*comment*/", ProtoToken::Comment("comment".into())),
+        multi_line_comment_extra_asterisk: ("/*comm*ent*/", ProtoToken::Comment("comm*ent".into())),
+        multi_line_comment_newlines: ("/*comm\nent*/", ProtoToken::Comment("comm\nent".into())),
+    );
 }
