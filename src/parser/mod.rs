@@ -76,7 +76,7 @@ struct MessageField {
 #[derive(Debug)]
 pub struct PositionedProtoToken {
     token: ProtoToken,
-    character: usize,
+    column: usize,
     line: usize,
 }
 

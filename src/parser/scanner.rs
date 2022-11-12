@@ -179,7 +179,22 @@ impl<T: Read> Scanner<T> {
     }
 
     fn string_literal(&mut self, open_char: &u8) -> Result<Vec<u8>> {
-        Ok(self.take_until_consume_including(|c| c != open_char, false)?)
+        let mut buffer = self.take_until_consume(|c| c != open_char && c != &b'\\', false)?;
+        while let Some(b) = self.peek() {
+            if b != b'\\' {
+                break;
+            }
+            self.pop();
+
+            let Some(b) = self.peek() else {
+                bail!("expected a character after an escape character")
+            };
+            self.pop();
+            buffer.push(b);
+            buffer.append(&mut self.take_until_consume(|c| c != open_char && c != &b'\\', false)?);
+        }
+        self.pop();
+        Ok(buffer)
     }
 
     // whitespace consumes all of the whitespace characters
@@ -416,7 +431,8 @@ mod tests {
         syntax: ("syntax", ProtoToken::Syntax),
         full_ident: ("foo.bar.baz", ProtoToken::FullIdentifier(vec!["foo".into(), "bar".into(), "baz".into()])),
         int_literal: ("42", ProtoToken::IntLiteral(42)),
-        string_literal: ("\"string\"", ProtoToken::StringLiteral("string".to_owned())),
+        string_literal: (r#""string""#, ProtoToken::StringLiteral("string".to_owned())),
+        string_literal_escaped: (r#""str\"ing""#, ProtoToken::StringLiteral(r#"str"ing"#.to_owned())),
         single_line_comment: ("//comment\n", ProtoToken::Comment("comment".into())),
         single_line_comment_eof: ("//comment", ProtoToken::Comment("comment".into())),
         multi_line_comment: ("/*comment*/", ProtoToken::Comment("comment".into())),
