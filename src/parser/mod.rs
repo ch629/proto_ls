@@ -11,7 +11,7 @@ use tokens::ProtoToken;
 #[derive(Debug)]
 pub struct ProtoFile {
     syntax: ProtoSyntax,
-    package: Vec<Vec<u8>>,
+    package: Vec<String>,
     imports: Vec<ProtoImport>,
     options: Vec<ProtoOption>,
     messages: Vec<ProtoMessage>,
@@ -39,28 +39,28 @@ struct ProtoImport {
 
 #[derive(Debug)]
 struct ProtoOption {
-    name: Vec<u8>,
+    name: String,
     value: String,
 }
 
 #[derive(Debug)]
 struct ProtoMessage {
-    name: Vec<u8>,
+    name: String,
     fields: Vec<MessageField>,
     messages: Vec<ProtoMessage>,
 }
 
 #[derive(Debug)]
 struct ProtoService {
-    name: Vec<u8>,
+    name: String,
     rpcs: Vec<ProtoRpc>,
 }
 
 #[derive(Debug)]
 struct ProtoRpc {
-    name: Vec<u8>,
-    params: Vec<Vec<u8>>,
-    returns: Vec<u8>,
+    name: String,
+    params: Vec<String>,
+    returns: String,
 }
 
 // TODO: Adding options to a message field
@@ -69,7 +69,7 @@ struct ProtoRpc {
 #[derive(Debug)]
 struct MessageField {
     r#type: ProtoFieldType,
-    name: Vec<u8>,
+    name: String,
     index: u16,
 }
 
@@ -80,11 +80,10 @@ pub struct PositionedProtoToken {
     line: usize,
 }
 
-// TODO: At this point should we just parse the Vec<u8> as utf-8 into a String?
 #[derive(Debug, strum::Display, PartialEq)]
 pub enum ProtoFieldType {
-    FullIdentifier(Vec<Vec<u8>>),
-    Identifier(Vec<u8>),
+    FullIdentifier(Vec<String>),
+    Identifier(String),
     Bool,
     String,
     Bytes,
@@ -99,8 +98,14 @@ pub enum ProtoFieldType {
 impl ProtoFieldType {
     fn from_token<T: Read>(t: ProtoToken, scan: &mut Scanner<T>) -> Result<Self> {
         Ok(match t {
-            ProtoToken::FullIdentifier(id) => Self::FullIdentifier(id),
-            ProtoToken::Identifier(id) => Self::Identifier(id),
+            ProtoToken::FullIdentifier(id) => Self::FullIdentifier(
+                id.iter()
+                    .map(|str| String::from_utf8(str.to_vec()))
+                    // TODO: Remove flatten & check for errors in utf-8 parsing
+                    .flatten()
+                    .collect(),
+            ),
+            ProtoToken::Identifier(id) => Self::Identifier(String::from_utf8(id)?),
             ProtoToken::Bool => Self::Bool,
             ProtoToken::String => Self::String,
             ProtoToken::Bytes => Self::Bytes,
@@ -159,7 +164,12 @@ pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
 
     Ok(ProtoFile {
         syntax,
-        package,
+        package: package
+            .iter()
+            .map(|str| String::from_utf8(str.to_vec()))
+            // TODO: Remove flatten & check for errors in utf-8 parsing
+            .flatten()
+            .collect(),
         imports,
         options,
         messages,
@@ -186,7 +196,7 @@ fn scan_message<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoMessage> {
     }
 
     Ok(ProtoMessage {
-        name,
+        name: String::from_utf8(name)?,
         fields,
         messages,
     })
@@ -209,7 +219,7 @@ fn scan_message_field<T: Read>(
 
     Ok(MessageField {
         r#type,
-        name,
+        name: String::from_utf8(name)?,
         index: index.try_into()?,
     })
 }
@@ -279,7 +289,7 @@ fn scan_option<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoOption> {
     scan.expect(ProtoToken::SemiColon)?;
 
     Ok(ProtoOption {
-        name: id,
+        name: String::from_utf8(id)?,
         value: opt,
     })
 }
