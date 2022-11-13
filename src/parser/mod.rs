@@ -18,17 +18,17 @@ pub struct ProtoFile {
     services: Vec<ProtoService>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display, PartialEq)]
 enum ProtoSyntax {
-    PROTO2,
-    PROTO3,
+    Proto2,
+    Proto3,
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display, PartialEq)]
 enum ProtoImportType {
-    DEFAULT,
-    WEAK,
-    PUBLIC,
+    Default,
+    Weak,
+    Public,
 }
 
 #[derive(Debug)]
@@ -80,6 +80,7 @@ pub struct PositionedProtoToken {
     line: usize,
 }
 
+// TODO: At this point should we just parse the Vec<u8> as utf-8 into a String?
 #[derive(Debug, strum::Display, PartialEq)]
 pub enum ProtoFieldType {
     FullIdentifier(Vec<Vec<u8>>),
@@ -89,10 +90,14 @@ pub enum ProtoFieldType {
     Bytes,
     Float,
     Double,
+    Map {
+        key: Box<ProtoFieldType>,
+        value: Box<ProtoFieldType>,
+    },
 }
 
 impl ProtoFieldType {
-    fn from_token(t: ProtoToken) -> Result<Self> {
+    fn from_token<T: Read>(t: ProtoToken, scan: &mut Scanner<T>) -> Result<Self> {
         Ok(match t {
             ProtoToken::FullIdentifier(id) => Self::FullIdentifier(id),
             ProtoToken::Identifier(id) => Self::Identifier(id),
@@ -101,7 +106,23 @@ impl ProtoFieldType {
             ProtoToken::Bytes => Self::Bytes,
             ProtoToken::Float => Self::Float,
             ProtoToken::Double => Self::Double,
-            ProtoToken::Map => todo!(),
+            ProtoToken::Map => {
+                scan.expect(ProtoToken::LessThan)?;
+                let Some(key_token) = scan.next() else {
+                    bail!("")
+                };
+                let key = Self::from_token(key_token, scan)?;
+                scan.expect(ProtoToken::Comma)?;
+                let Some(value_token) = scan.next() else {
+                    bail!("")
+                };
+                let value = Self::from_token(value_token, scan)?;
+                scan.expect(ProtoToken::GreaterThan)?;
+                Self::Map {
+                    key: Box::new(key),
+                    value: Box::new(value),
+                }
+            }
             other => bail!("non proto field type {other}"),
         })
     }
@@ -110,6 +131,8 @@ impl ProtoFieldType {
 // proto = syntax { import | package | option | topLevelDef | emptyStatement }
 // topLevelDef = message | enum | service
 pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
+    // TODO: Some of these errors can probably allow it to continue parsing (duplicate package) &
+    // just batch the errors up
     let syntax = scan_syntax(scan)?;
 
     let mut imports = vec![];
@@ -123,6 +146,7 @@ pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
             ProtoToken::Comment(_) => {}
             ProtoToken::SemiColon => {}
             ProtoToken::Syntax => todo!(),
+            // TODO: Check we haven't already had a package
             ProtoToken::Package => package = scan_package(scan)?,
             ProtoToken::Option => options.push(scan_option(scan)?),
             ProtoToken::Import => imports.push(scan_import(scan)?),
@@ -172,7 +196,7 @@ fn scan_message_field<T: Read>(
     scan: &mut Scanner<T>,
     first_token: ProtoToken,
 ) -> Result<MessageField> {
-    let r#type = ProtoFieldType::from_token(first_token)?;
+    let r#type = ProtoFieldType::from_token(first_token, scan)?;
 
     let Some(ProtoToken::Identifier(name)) = scan.next() else {
         bail!("expected identifier/type")
@@ -201,8 +225,8 @@ fn scan_syntax<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoSyntax> {
         bail!("expected string literal")
     };
     let s = match syntax.as_str() {
-        "proto3" => ProtoSyntax::PROTO3,
-        "proto2" => ProtoSyntax::PROTO2,
+        "proto3" => ProtoSyntax::Proto3,
+        "proto2" => ProtoSyntax::Proto2,
         _ => bail!("expected a syntax of either 'proto3' or 'proto2'"),
     };
     scan.expect(ProtoToken::SemiColon)?;
@@ -211,13 +235,26 @@ fn scan_syntax<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoSyntax> {
 }
 
 fn scan_import<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoImport> {
-    // TODO: Optional public or weak
-    let Some(ProtoToken::StringLiteral(import)) = scan.next() else{
+    let Some(mut next) = scan.next() else {
+        bail!("expected either 'public', 'weak' or a string literal after 'import'")
+    };
+    let r#type = match next {
+        ProtoToken::Public => ProtoImportType::Public,
+        ProtoToken::Weak => ProtoImportType::Weak,
+        _ => ProtoImportType::Default,
+    };
+    if r#type != ProtoImportType::Default {
+        let Some(token) = scan.next() else {
+            bail!("expected a string literal to import")
+        };
+        next = token;
+    }
+    let ProtoToken::StringLiteral(import) = next else{
         bail!("expected string literal")
     };
     scan.expect(ProtoToken::SemiColon)?;
     Ok(ProtoImport {
-        r#type: ProtoImportType::DEFAULT,
+        r#type,
         path: import,
     })
 }
@@ -250,7 +287,9 @@ fn scan_option<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoOption> {
 fn read_n<R: Read>(reader: &mut R, bytes_to_read: u64) -> Result<Vec<u8>> {
     let mut buf = vec![];
     let mut chunk = reader.take(bytes_to_read);
-    // TODO: Return error if n != bytes_to_read?
-    let _ = chunk.read_to_end(&mut buf)?;
+    let bytes = chunk.read_to_end(&mut buf)?;
+    if bytes as u64 != bytes_to_read {
+        bail!("expected {bytes_to_read} bytes to read but only read {bytes}")
+    }
     Ok(buf)
 }
