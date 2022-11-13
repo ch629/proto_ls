@@ -68,7 +68,7 @@ struct ProtoRpc {
 // TODO: Handle a map type - map<string, string>
 #[derive(Debug)]
 struct MessageField {
-    r#type: Vec<Vec<u8>>,
+    r#type: ProtoFieldType,
     name: Vec<u8>,
     index: u16,
 }
@@ -78,6 +78,33 @@ pub struct PositionedProtoToken {
     token: ProtoToken,
     column: usize,
     line: usize,
+}
+
+#[derive(Debug, strum::Display, PartialEq)]
+pub enum ProtoFieldType {
+    FullIdentifier(Vec<Vec<u8>>),
+    Identifier(Vec<u8>),
+    Bool,
+    String,
+    Bytes,
+    Float,
+    Double,
+}
+
+impl ProtoFieldType {
+    fn from_token(t: ProtoToken) -> Result<Self> {
+        Ok(match t {
+            ProtoToken::FullIdentifier(id) => Self::FullIdentifier(id),
+            ProtoToken::Identifier(id) => Self::Identifier(id),
+            ProtoToken::Bool => Self::Bool,
+            ProtoToken::String => Self::String,
+            ProtoToken::Bytes => Self::Bytes,
+            ProtoToken::Float => Self::Float,
+            ProtoToken::Double => Self::Double,
+            ProtoToken::Map => todo!(),
+            other => bail!("non proto field type {other}"),
+        })
+    }
 }
 
 // proto = syntax { import | package | option | topLevelDef | emptyStatement }
@@ -145,14 +172,10 @@ fn scan_message_field<T: Read>(
     scan: &mut Scanner<T>,
     first_token: ProtoToken,
 ) -> Result<MessageField> {
-    let r#type = match first_token {
-        ProtoToken::FullIdentifier(id) => id,
-        ProtoToken::Identifier(id) => vec![id],
-        _ => bail!("expected identifier type"),
-    };
+    let r#type = ProtoFieldType::from_token(first_token)?;
 
     let Some(ProtoToken::Identifier(name)) = scan.next() else {
-        bail!("expected identifier")
+        bail!("expected identifier/type")
     };
     scan.expect(ProtoToken::Equals)?;
     let Some(ProtoToken::IntLiteral(index)) = scan.next() else {

@@ -12,8 +12,8 @@ use anyhow::{bail, Result};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // parse_and_log_file();
-    handle_io().await?;
+    parse_and_log_file();
+    // handle_io().await?;
     Ok(())
 }
 
