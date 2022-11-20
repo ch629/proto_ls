@@ -30,10 +30,7 @@ impl<T: Read> Scanner<T> {
             let _ = self.load_buffer(1);
         }
 
-        match self.buffer.borrow().first() {
-            Some(i) => Some(*i),
-            None => None,
-        }
+        self.buffer.borrow().first().copied()
     }
 
     fn load_buffer(&mut self, len: u64) -> Result<usize> {
@@ -73,17 +70,12 @@ impl<T: Read> Scanner<T> {
 
     fn scan(&mut self, predicate: impl Fn(&u8) -> bool) -> Option<Vec<u8>> {
         let mut seq = vec![];
-        loop {
-            match self.peek() {
-                Some(c) => {
-                    if predicate(&c) {
-                        self.pop();
-                        seq.push(c);
-                    } else {
-                        break;
-                    }
-                }
-                None => break,
+        while let Some(c) = self.peek() {
+            if predicate(&c) {
+                self.pop();
+                seq.push(c);
+            } else {
+                break;
             }
         }
 
@@ -102,13 +94,7 @@ impl<T: Read> Scanner<T> {
                 _ => return None,
             }
         }
-        self.scan(|c| match c {
-            b'a'..=b'z' => true,
-            b'A'..=b'Z' => true,
-            b'0'..=b'9' => true,
-            b'_' => true,
-            _ => false,
-        })
+        self.scan(|c| matches!(c, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
     }
 
     fn dot(&mut self) -> Option<()> {
@@ -160,19 +146,15 @@ impl<T: Read> Scanner<T> {
                 _ => return None,
             }
         }
-        self.scan(|c| match c {
-            b'0'..=b'9' => true,
-            _ => false,
-        })
+        self.scan(|c| matches!(c, b'0'..=b'9'))
     }
 
     fn string(&mut self) -> Option<Result<Vec<u8>>> {
-        let open_char;
-        match self.peek() {
-            Some(b'"') => open_char = b'"',
-            Some(b'\'') => open_char = b'\'',
+        let open_char = match self.peek() {
+            Some(b'"') => b'"',
+            Some(b'\'') => b'\'',
             _ => return None,
-        }
+        };
         self.pop();
 
         Some(self.string_literal(&open_char))
@@ -199,13 +181,7 @@ impl<T: Read> Scanner<T> {
 
     // whitespace consumes all of the whitespace characters
     fn whitespace(&mut self) {
-        let _ = self.take_until(
-            |c| match c {
-                b' ' | b'\r' | b'\n' | b'\t' => true,
-                _ => false,
-            },
-            true,
-        );
+        let _ = self.take_until(|c| matches!(c, b' ' | b'\r' | b'\n' | b'\t'), true);
     }
 
     // take_until_consume takes each character until a predicate no longer matches & consumes them,
@@ -240,7 +216,7 @@ impl<T: Read> Scanner<T> {
             }
         }
 
-        if include_eof && self.peek() == None {
+        if include_eof && self.peek().is_none() {
             return Ok(buf);
         }
         bail!("didn't match predicate")
@@ -257,7 +233,7 @@ impl<T: Read> Scanner<T> {
             }
         }
 
-        if include_eof && self.peek() == None {
+        if include_eof && self.peek().is_none() {
             return Ok(());
         }
         bail!("didn't match predicate")
@@ -343,14 +319,11 @@ impl<T: io::Read> Iterator for Scanner<T> {
             return Some(ProtoToken::FullIdentifier(name));
         }
 
-        match self.string() {
-            Some(opt) => {
-                return match opt {
-                    Ok(s) => Some(ProtoToken::StringLiteral(String::from_utf8(s).unwrap())),
-                    Err(_) => None,
-                };
-            }
-            None => {}
+        if let Some(opt) = self.string() {
+            return match opt {
+                Ok(s) => Some(ProtoToken::StringLiteral(String::from_utf8(s).unwrap())),
+                Err(_) => None,
+            };
         }
 
         if let Some(i) = self.int_literal() {

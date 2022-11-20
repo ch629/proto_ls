@@ -1,4 +1,4 @@
-#[derive(Debug, strum::Display, PartialEq)]
+#[derive(Debug, strum::Display, PartialEq, Eq)]
 pub enum ProtoToken {
     FullIdentifier(Vec<Vec<u8>>),
     Identifier(Vec<u8>),

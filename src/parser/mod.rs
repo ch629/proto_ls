@@ -100,9 +100,7 @@ impl ProtoFieldType {
         Ok(match t {
             ProtoToken::FullIdentifier(id) => Self::FullIdentifier(
                 id.iter()
-                    .map(|str| String::from_utf8(str.to_vec()))
-                    // TODO: Remove flatten & check for errors in utf-8 parsing
-                    .flatten()
+                    .flat_map(|str| String::from_utf8(str.to_vec()))
                     .collect(),
             ),
             ProtoToken::Identifier(id) => Self::Identifier(String::from_utf8(id)?),
@@ -114,12 +112,12 @@ impl ProtoFieldType {
             ProtoToken::Map => {
                 scan.expect(ProtoToken::LessThan)?;
                 let Some(key_token) = scan.next() else {
-                    bail!("")
+                    bail!("expected a field token")
                 };
                 let key = Self::from_token(key_token, scan)?;
                 scan.expect(ProtoToken::Comma)?;
                 let Some(value_token) = scan.next() else {
-                    bail!("")
+                    bail!("expected a field token")
                 };
                 let value = Self::from_token(value_token, scan)?;
                 scan.expect(ProtoToken::GreaterThan)?;
@@ -166,9 +164,7 @@ pub fn scan_file<T: Read>(scan: &mut Scanner<T>) -> Result<ProtoFile> {
         syntax,
         package: package
             .iter()
-            .map(|str| String::from_utf8(str.to_vec()))
-            // TODO: Remove flatten & check for errors in utf-8 parsing
-            .flatten()
+            .flat_map(|str| String::from_utf8(str.to_vec()))
             .collect(),
         imports,
         options,

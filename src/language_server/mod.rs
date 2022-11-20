@@ -111,5 +111,5 @@ fn handle_call(msg: LsMethod) -> Result<()> {
 }
 
 pub fn on_message(msg: LsBaseMessage) -> Result<()> {
-    get_method(msg).map(|m| handle_call(m))?
+    get_method(msg).map(handle_call)?
 }
